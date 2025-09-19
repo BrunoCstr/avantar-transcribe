@@ -833,4 +833,35 @@ async def extract_auto(
         )
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Configuração para produção
+    import sys
+    
+    # Log de inicialização
+    print("🚀 Iniciando Avantar Transcribe API...")
+    print(f"🐍 Python: {sys.version}")
+    print(f"📁 Diretório: {os.getcwd()}")
+    
+    try:
+        # Verificar se consegue carregar as dependências principais
+        print("📦 Carregando dependências...")
+        import torch
+        print(f"🔥 PyTorch: {torch.__version__}")
+        
+        print("🎵 Carregando modelos Whisper...")
+        # Carregar apenas modelo tiny inicialmente para economizar memória
+        whisper_models["tiny"] = whisper.load_model("tiny")
+        print("✅ Modelo 'tiny' carregado!")
+        
+        print("🌐 Iniciando servidor...")
+        uvicorn.run(
+            app, 
+            host="0.0.0.0", 
+            port=8000,
+            log_level="info",
+            access_log=True
+        )
+    except Exception as e:
+        print(f"❌ Erro na inicialização: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

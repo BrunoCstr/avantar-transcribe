@@ -45,5 +45,5 @@ ENV PORT=8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Comando de inicialização
-CMD ["python", "src/transcribe.py"]
+# Comando de inicialização com logs detalhados
+CMD ["python", "-u", "src/transcribe.py"]
