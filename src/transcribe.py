@@ -391,10 +391,10 @@ async def transcribe_audio(
         # Tentar detectar pelo nome do arquivo
         ext = file.filename.split('.')[-1].lower() if file.filename else ""
         if ext not in ['mp3', 'wav', 'm4a', 'ogg', 'webm', 'flac', 'mp4', 'avi', 'mov', 'mkv']:
-        raise HTTPException(
-            status_code=400, 
+            raise HTTPException(
+                status_code=400, 
                 detail=f"Tipo de arquivo não suportado: {file.content_type}"
-        )
+            )
     
     temp_files = []
     try:
