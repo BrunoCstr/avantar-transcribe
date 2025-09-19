@@ -11,7 +11,6 @@ RUN apt-get update && apt-get install -y \
     tesseract-ocr-por \
     tesseract-ocr-eng \
     poppler-utils \
-    libgl1-mesa-glx \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -47,4 +46,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Comando de inicialização
-CMD ["python", "avantar-transcribe/transcribe.py"]
+CMD ["python", "src/transcribe.py"]

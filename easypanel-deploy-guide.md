@@ -84,6 +84,11 @@ RUN apt-get update && apt-get install -y \
     git \
     curl \
     build-essential \
+    tesseract-ocr \
+    tesseract-ocr-por \
+    tesseract-ocr-eng \
+    poppler-utils \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Criar diretório da aplicação
@@ -111,8 +116,12 @@ EXPOSE 8000
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
 # Comando de inicialização
-CMD ["python", "avantar-transcribe/transcribe.py"]
+CMD ["python", "src/transcribe.py"]
 ```
 
 ### 4. Configurações de Environment Variables
