@@ -718,7 +718,7 @@ async def extract_document(
     - **use_cache**: Usar cache de resultados
     """
     
-            content = await file.read()
+    content = await file.read()
     if len(content) > MAX_FILE_SIZE:
         raise HTTPException(
             status_code=413,
