@@ -6,8 +6,9 @@ aiofiles==23.2.1
 
 # Whisper (versão otimizada)
 openai-whisper==20231117
-torch==2.1.0+cpu
-torchaudio==2.1.0+cpu
+# Torch CPU wheels (sem "+cpu" no PyPI)
+torch==2.2.2
+torchaudio==2.2.2
 
 # OCR (opcional - apenas Tesseract)
 pytesseract==0.3.10
@@ -16,10 +17,5 @@ Pillow==10.1.0
 # Monitoramento de sistema
 psutil==5.9.6
 
-# Processamento de mídia
-ffmpeg-python==0.2.0
-
-# Utilitários
-pathlib2==2.3.7
-hashlib2==1.0.1
+# (ffmpeg é instalado via apt no Dockerfile)
 
