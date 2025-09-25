@@ -1,7 +1,10 @@
 FROM python:3.11-slim
 WORKDIR /app
+
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+ && python -c "import pypdf; import fastapi; import multipart; print('ok')"
+
 COPY src/transcribe_pdf.py .
 EXPOSE 8080
 CMD ["uvicorn","transcribe_pdf:app","--host","0.0.0.0","--port","8080"]
