@@ -10,6 +10,9 @@ openai-whisper==20231117
 torch==2.2.2
 torchaudio==2.2.2
 
+# Fix compatibilidade de binários com PyTorch/Whisper
+numpy==1.26.4
+
 # OCR (opcional - apenas Tesseract)
 pytesseract==0.3.10
 Pillow==10.1.0

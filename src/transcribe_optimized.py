@@ -480,4 +480,3 @@ if __name__ == "__main__":
         print(f"❌ Erro na inicialização: {e}")
         import traceback
         traceback.print_exc()
-
