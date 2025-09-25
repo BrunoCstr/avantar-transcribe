@@ -1,17 +1,9 @@
 FROM python:3.11-slim
-
-# Instalar dependências do sistema
-RUN apt-get update && apt-get install -y \
-    tesseract-ocr \
-    tesseract-ocr-por \
-    poppler-utils \
-    && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
 
 COPY requirements_pdf.txt .
 RUN pip install --no-cache-dir -r requirements_pdf.txt \
- && python -c "import pypdf; import fastapi; import multipart; import pdf2image; import pytesseract; import fitz; print('ok')"
+ && python -c "import pypdf; import fastapi; import multipart; print('ok')"
 
 COPY src/transcribe_pdf.py .
 EXPOSE 8080
