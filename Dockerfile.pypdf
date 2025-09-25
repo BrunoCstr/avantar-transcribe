@@ -1,8 +1,8 @@
 FROM python:3.11-slim
 WORKDIR /app
 
-COPY requirements_pdf.txt requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt \
+COPY requirements_pdf.txt .
+RUN pip install --no-cache-dir -r requirements_pdf.txt \
  && python -c "import pypdf; import fastapi; import multipart; print('ok')"
 
 COPY src/transcribe_pdf.py .
