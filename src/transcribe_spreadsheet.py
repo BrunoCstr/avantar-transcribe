@@ -29,8 +29,83 @@ def test():
         "supported_formats": ["xlsx", "xls", "csv"]
     }
 
-def detect_file_type(filename: str) -> str:
-    """Detecta o tipo de planilha baseado na extensão"""
+@app.post("/debug-file")
+async def debug_file(file: UploadFile = File(...)):
+    """Endpoint para debug de arquivos - mostra informações detalhadas"""
+    try:
+        data = await file.read()
+        
+        # Informações básicas
+        info = {
+            "filename": file.filename,
+            "content_type": file.content_type,
+            "size_bytes": len(data),
+            "first_100_bytes": data[:100].hex() if len(data) >= 100 else data.hex(),
+            "first_100_chars": data[:100].decode('utf-8', errors='ignore') if len(data) >= 100 else data.decode('utf-8', errors='ignore'),
+        }
+        
+        # Detectar tipo usando a nova função
+        detected_type = detect_file_type(file.filename, file.content_type, data)
+        info["detected_type"] = detected_type
+        
+        # Tentar processar para ver se funciona
+        try:
+            if detected_type == "CSV":
+                sheets_data = process_csv(data)
+                info["csv_processing"] = "success"
+                info["csv_sheets"] = list(sheets_data.keys())
+            else:
+                sheets_data = process_excel(data)
+                info["excel_processing"] = "success"
+                info["excel_sheets"] = list(sheets_data.keys())
+        except Exception as e:
+            info["processing_error"] = str(e)
+        
+        return {
+            "status": "success",
+            "file_info": info
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e)
+        }
+
+def detect_file_type(filename: str, content_type: str = None, data: bytes = None) -> str:
+    """Detecta o tipo de planilha baseado na extensão, MIME type e conteúdo"""
+    
+    # 1. Tentar detectar pelo MIME type primeiro
+    if content_type:
+        if 'spreadsheet' in content_type or 'excel' in content_type:
+            if 'xlsx' in content_type or 'openxml' in content_type:
+                return "XLSX"
+            elif 'xls' in content_type:
+                return "XLS"
+        elif 'csv' in content_type or 'text/csv' in content_type:
+            return "CSV"
+    
+    # 2. Tentar detectar pelos primeiros bytes do arquivo
+    if data:
+        # Verificar se é CSV (texto com vírgulas, ponto e vírgula, ou tabs)
+        try:
+            text_sample = data[:1000].decode('utf-8', errors='ignore')
+            # Verificar padrões típicos de CSV
+            if ',' in text_sample or ';' in text_sample or '\t' in text_sample:
+                # Verificar se tem quebras de linha (indicativo de CSV)
+                if '\n' in text_sample or '\r' in text_sample:
+                    return "CSV"
+        except:
+            pass
+        
+        # Verificar se é Excel (XLSX é um ZIP)
+        if data.startswith(b'PK'):
+            return "XLSX"
+        # Verificar se é Excel antigo (XLS)
+        elif data.startswith(b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1'):
+            return "XLS"
+    
+    # 3. Detectar pela extensão do arquivo
     filename_lower = filename.lower()
     if filename_lower.endswith('.xlsx') or filename_lower.endswith('.xlsm'):
         return "XLSX"
@@ -225,13 +300,17 @@ async def extract_spreadsheet(
             }
         
         # Detectar tipo de arquivo
-        file_type = detect_file_type(file.filename)
-        logger.info(f"Tipo de arquivo detectado: {file_type}")
+        file_type = detect_file_type(
+            file.filename, 
+            file.content_type, 
+            data
+        )
+        logger.info(f"Tipo de arquivo detectado: {file_type} (filename: {file.filename}, content_type: {file.content_type})")
         
         if file_type == "UNKNOWN":
             return {
                 "status": "error",
-                "error": "Formato de arquivo não suportado. Use xlsx, xls ou csv"
+                "error": f"Formato de arquivo não suportado. Use xlsx, xls ou csv. Detectado: filename='{file.filename}', content_type='{file.content_type}'"
             }
         
         # Processar planilha
@@ -299,13 +378,17 @@ async def extract_for_n8n(file: UploadFile = File(...)):
             }
         
         # Detectar tipo de arquivo
-        file_type = detect_file_type(file.filename)
-        logger.info(f"Tipo detectado: {file_type}")
+        file_type = detect_file_type(
+            file.filename, 
+            file.content_type, 
+            data
+        )
+        logger.info(f"Tipo detectado: {file_type} (filename: {file.filename}, content_type: {file.content_type})")
         
         if file_type == "UNKNOWN":
             return {
                 "status": "error",
-                "error": "Formato não suportado. Use xlsx, xls ou csv"
+                "error": f"Formato não suportado. Use xlsx, xls ou csv. Detectado: filename='{file.filename}', content_type='{file.content_type}'"
             }
         
         # Processar planilha
@@ -371,7 +454,12 @@ async def extract_and_send_to_n8n(
         
         # Usar o endpoint otimizado
         data = await file.read()
-        file_type = detect_file_type(file.filename)
+        file_type = detect_file_type(
+            file.filename, 
+            file.content_type, 
+            data
+        )
+        logger.info(f"Tipo detectado: {file_type} (filename: {file.filename}, content_type: {file.content_type})")
         
         if file_type == "CSV":
             sheets_data = process_csv(data)
@@ -445,7 +533,12 @@ async def analyze_spreadsheet(file: UploadFile = File(...)):
     """
     try:
         data = await file.read()
-        file_type = detect_file_type(file.filename)
+        file_type = detect_file_type(
+            file.filename, 
+            file.content_type, 
+            data
+        )
+        logger.info(f"Tipo detectado: {file_type} (filename: {file.filename}, content_type: {file.content_type})")
         
         if file_type == "CSV":
             sheets_data = process_csv(data)
