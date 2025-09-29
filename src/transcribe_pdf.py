@@ -14,6 +14,15 @@ app = FastAPI()
 def health(): 
     return {"ok": True}
 
+@app.get("/test")
+def test():
+    """Endpoint de teste para verificar funcionamento"""
+    return {
+        "status": "ok",
+        "message": "Serviço funcionando",
+        "version": "1.0.0"
+    }
+
 def remove_ocr_artifacts(text):
     """Remove lixo de OCR e layout"""
     if not text:
@@ -233,23 +242,69 @@ def create_service_table(text):
 @app.post("/extract")
 async def extract(file: UploadFile = File(...)):
     try:
+        logger.info(f"Iniciando processamento do arquivo: {file.filename}")
+        
+        # Ler dados do arquivo
         data = await file.read()
-        reader = PdfReader(io.BytesIO(data))
+        logger.info(f"Arquivo lido com sucesso. Tamanho: {len(data)} bytes")
+        
+        if len(data) == 0:
+            return {
+                "text": "",
+                "error": "Arquivo vazio",
+                "status": "error"
+            }
+        
+        # Verificar se é um PDF válido
+        if not data.startswith(b'%PDF'):
+            return {
+                "text": "",
+                "error": "Arquivo não é um PDF válido",
+                "status": "error"
+            }
+        
+        # Criar reader com tratamento de erro
+        try:
+            reader = PdfReader(io.BytesIO(data))
+            logger.info(f"PDF carregado com sucesso. Páginas: {len(reader.pages)}")
+        except Exception as pdf_error:
+            logger.error(f"Erro ao carregar PDF: {pdf_error}")
+            return {
+                "text": "",
+                "error": f"Erro ao carregar PDF: {str(pdf_error)}",
+                "status": "error"
+            }
         
         all_text = []
         
         for page_num, page in enumerate(reader.pages, 1):
-            logger.info(f"Processando página {page_num}")
-            
-            # Extrair texto direto do PDF
-            page_text = page.extract_text() or ""
-            page_text = clean_text(page_text)
-            
-            if page_text.strip():
-                all_text.append(page_text)
+            try:
+                logger.info(f"Processando página {page_num}")
+                
+                # Extrair texto direto do PDF
+                page_text = page.extract_text() or ""
+                page_text = clean_text(page_text)
+                
+                if page_text.strip():
+                    all_text.append(page_text)
+                    logger.info(f"Página {page_num} processada com sucesso. Texto: {len(page_text)} caracteres")
+                else:
+                    logger.warning(f"Página {page_num} não contém texto extraível")
+                    
+            except Exception as page_error:
+                logger.error(f"Erro ao processar página {page_num}: {page_error}")
+                continue
+        
+        if not all_text:
+            return {
+                "text": "",
+                "error": "Nenhum texto foi extraído do PDF",
+                "status": "error"
+            }
         
         # Combinar todo o texto
         raw_text = "\n\n".join(all_text).strip()
+        logger.info(f"Texto combinado: {len(raw_text)} caracteres")
         
         # Processar o texto final
         processed_text = raw_text
@@ -271,6 +326,8 @@ async def extract(file: UploadFile = File(...)):
         if service_table:
             final_markdown += service_table
         
+        logger.info("Processamento concluído com sucesso")
+        
         return {
             "text": final_markdown,
             "raw_text": raw_text,
@@ -280,10 +337,10 @@ async def extract(file: UploadFile = File(...)):
         }
         
     except Exception as e:
-        logger.error(f"Erro ao processar PDF: {e}")
+        logger.error(f"Erro geral ao processar PDF: {e}", exc_info=True)
         return {
             "text": "",
-            "error": str(e),
+            "error": f"Erro interno: {str(e)}",
             "status": "error"
         }
 
