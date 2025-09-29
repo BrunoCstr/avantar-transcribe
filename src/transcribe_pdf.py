@@ -3,6 +3,8 @@ import io
 import re
 from pypdf import PdfReader
 import logging
+from PIL import Image
+import pytesseract
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -75,6 +77,23 @@ async def debug_file(file: UploadFile = File(...)):
             "status": "error",
             "error": str(e)
         }
+
+def detect_file_type(data):
+    """Detecta o tipo de arquivo baseado nos primeiros bytes"""
+    if data.startswith(b'%PDF'):
+        return "PDF"
+    elif data.startswith(b'\xff\xd8\xff'):
+        return "JPEG"
+    elif data.startswith(b'\x89PNG'):
+        return "PNG"
+    elif data.startswith(b'PK'):
+        return "ZIP/Office"
+    elif data.startswith(b'GIF'):
+        return "GIF"
+    elif data.startswith(b'BM'):
+        return "BMP"
+    else:
+        return "Desconhecido"
 
 def remove_ocr_artifacts(text):
     """Remove lixo de OCR e layout"""
@@ -308,28 +327,63 @@ async def extract(file: UploadFile = File(...)):
                 "status": "error"
             }
         
-        # Verificar se é um PDF válido (mais flexível)
-        pdf_headers = [b'%PDF', b'%pdf', b'\x25PDF', b'\x25pdf']
-        is_pdf = any(data.startswith(header) for header in pdf_headers)
+        # Detectar tipo de arquivo
+        file_type = detect_file_type(data)
+        logger.info(f"Tipo de arquivo detectado: {file_type}")
         
-        if not is_pdf:
-            # Log dos primeiros bytes para debug
-            first_bytes = data[:20] if len(data) >= 20 else data
-            logger.warning(f"Arquivo não tem header PDF padrão. Primeiros bytes: {first_bytes}")
-            logger.info("Tentando processar mesmo assim...")
+        if file_type == "JPEG" or file_type == "PNG":
+            # Processar como imagem usando OCR
+            logger.info("Processando como imagem com OCR...")
+            try:
+                image = Image.open(io.BytesIO(data))
+                text = pytesseract.image_to_string(image, lang='por')
+                text = clean_text(text)
+                
+                if not text.strip():
+                    return {
+                        "text": "",
+                        "error": "Nenhum texto foi extraído da imagem",
+                        "status": "error"
+                    }
+                
+                # Processar o texto extraído
+                processed_text = remove_ocr_artifacts(text)
+                processed_text = normalize_text(processed_text)
+                markdown_text = structure_as_markdown(processed_text)
+                
+                return {
+                    "text": markdown_text,
+                    "raw_text": text,
+                    "pages_processed": 1,
+                    "status": "success",
+                    "format": "markdown",
+                    "file_type": file_type
+                }
+                
+            except Exception as ocr_error:
+                logger.error(f"Erro no OCR: {ocr_error}")
+                return {
+                    "text": "",
+                    "error": f"Erro ao processar imagem: {str(ocr_error)}",
+                    "status": "error"
+                }
         
-        # Criar reader com tratamento de erro (tenta mesmo sem header padrão)
+        elif file_type != "PDF":
+            return {
+                "text": "",
+                "error": f"Tipo de arquivo não suportado: {file_type}. Use PDF ou imagens (JPEG/PNG)",
+                "status": "error"
+            }
+        
+        # Processar como PDF
         try:
             reader = PdfReader(io.BytesIO(data))
             logger.info(f"PDF carregado com sucesso. Páginas: {len(reader.pages)}")
         except Exception as pdf_error:
-            # Log dos primeiros bytes para debug
-            first_bytes = data[:20] if len(data) >= 20 else data
             logger.error(f"Erro ao carregar PDF: {pdf_error}")
-            logger.error(f"Primeiros bytes do arquivo: {first_bytes}")
             return {
                 "text": "",
-                "error": f"Erro ao carregar PDF: {str(pdf_error)}. Primeiros bytes: {first_bytes}",
+                "error": f"Erro ao carregar PDF: {str(pdf_error)}",
                 "status": "error"
             }
         
