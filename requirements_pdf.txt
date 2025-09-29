@@ -4,7 +4,3 @@ pypdf==4.3.1
 python-multipart
 Pillow==10.1.0
 pytesseract==0.3.10
-openai-whisper==20231117
-torch>=1.9.0
-aiofiles==23.2.1
-ffmpeg-python==0.2.0
