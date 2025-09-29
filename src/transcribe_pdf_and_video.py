@@ -1,20 +1,46 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, HTTPException
 import io
 import re
 from pypdf import PdfReader
 import logging
 from PIL import Image
 import pytesseract
+import whisper
+import tempfile
+import os
+import subprocess
+from typing import Optional
+import aiofiles
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
+app = FastAPI(
+    title="PDF and Video Transcription API",
+    description="API para extração de texto de PDFs, OCR de imagens e transcrição de vídeos",
+    version="2.0.0"
+)
+
+# Carregar modelo Whisper Tiny (otimizado para VPS)
+logger.info("Carregando modelo Whisper Tiny...")
+try:
+    whisper_model = whisper.load_model("tiny")
+    logger.info("Modelo Whisper carregado com sucesso!")
+except Exception as e:
+    logger.error(f"Erro ao carregar modelo Whisper: {e}")
+    whisper_model = None
 
 @app.get("/health")
 def health(): 
-    return {"ok": True}
+    return {
+        "ok": True,
+        "services": {
+            "pdf_extraction": True,
+            "ocr": True,
+            "video_transcription": whisper_model is not None
+        }
+    }
 
 @app.get("/test")
 def test():
@@ -22,7 +48,7 @@ def test():
     return {
         "status": "ok",
         "message": "Serviço funcionando",
-        "version": "1.0.0"
+        "version": "2.0.0"
     }
 
 @app.post("/debug-file")
@@ -527,3 +553,262 @@ async def extract_structured(file: UploadFile = File(...)):
             "error": str(e),
             "status": "error"
         }
+
+# ========== FUNÇÕES DE TRANSCRIÇÃO DE VÍDEO ==========
+
+def convert_video_to_audio(video_path: str) -> str:
+    """Converte vídeo para áudio usando ffmpeg"""
+    audio_path = video_path.rsplit('.', 1)[0] + '_audio.wav'
+    
+    cmd = [
+        'ffmpeg', '-i', video_path,
+        '-vn',  # Sem vídeo
+        '-acodec', 'pcm_s16le',  # Codec de áudio
+        '-ar', '16000',  # Sample rate otimizado para Whisper
+        '-ac', '1',  # Mono
+        '-y',  # Sobrescrever
+        audio_path
+    ]
+    
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return audio_path
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Erro na conversão: {e.stderr}")
+        raise HTTPException(status_code=500, detail="Erro na conversão do vídeo")
+
+def transcribe_video_file(video_path: str, language: str = "pt") -> dict:
+    """Transcreve arquivo de vídeo usando Whisper"""
+    if not whisper_model:
+        raise HTTPException(status_code=500, detail="Modelo Whisper não disponível")
+    
+    try:
+        # Converter vídeo para áudio
+        audio_path = convert_video_to_audio(video_path)
+        
+        # Transcrever áudio
+        transcribe_options = {
+            "fp16": False,  # Melhor compatibilidade
+            "temperature": 0.0,  # Mais determinístico
+        }
+        
+        if language and language != "auto":
+            transcribe_options["language"] = language
+        
+        result = whisper_model.transcribe(audio_path, **transcribe_options)
+        
+        # Limpar arquivo de áudio temporário
+        try:
+            os.unlink(audio_path)
+        except:
+            pass
+        
+        return {
+            "text": result["text"].strip(),
+            "language": result["language"],
+            "segments": result["segments"],
+            "duration": result.get("segments", [])[-1]["end"] if result.get("segments") else 0
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro na transcrição: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erro na transcrição: {str(e)}")
+
+# ========== ENDPOINTS DE TRANSCRIÇÃO DE VÍDEO ==========
+
+@app.post("/transcribe-video")
+async def transcribe_video(
+    file: UploadFile = File(...),
+    language: Optional[str] = "pt"
+):
+    """
+    Transcreve arquivo de vídeo para texto
+    
+    - **file**: Arquivo de vídeo (mp4, avi, mov, mkv, etc.)
+    - **language**: Código do idioma (pt, en, es, etc.)
+    """
+    
+    # Verificar se é um arquivo de vídeo
+    allowed_video_types = {
+        'video/mp4', 'video/avi', 'video/mov', 'video/mkv',
+        'video/webm', 'video/quicktime'
+    }
+    
+    content = await file.read()
+    
+    # Verificar tipo de arquivo
+    if file.content_type not in allowed_video_types:
+        # Tentar detectar pela extensão
+        ext = file.filename.split('.')[-1].lower() if file.filename else ""
+        if ext not in ['mp4', 'avi', 'mov', 'mkv', 'webm', 'qt']:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Tipo de arquivo não suportado: {file.content_type}. Use arquivos de vídeo."
+            )
+    
+    # Limite de tamanho (100MB)
+    if len(content) > 100 * 1024 * 1024:
+        raise HTTPException(
+            status_code=413,
+            detail="Arquivo muito grande. Máximo: 100MB"
+        )
+    
+    temp_files = []
+    try:
+        # Criar arquivo temporário
+        suffix = f".{file.filename.split('.')[-1]}" if file.filename else ".mp4"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+            temp_file.write(content)
+            temp_file_path = temp_file.name
+            temp_files.append(temp_file_path)
+        
+        logger.info(f"Transcrevendo vídeo: {file.filename} ({len(content)} bytes)")
+        
+        # Transcrever vídeo
+        result = transcribe_video_file(temp_file_path, language)
+        
+        # Preparar resposta
+        response = {
+            **result,
+            "filename": file.filename,
+            "file_size": len(content),
+            "status": "success"
+        }
+        
+        logger.info("Transcrição de vídeo concluída com sucesso")
+        return response
+        
+    except Exception as e:
+        logger.error(f"Erro na transcrição de vídeo: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erro na transcrição: {str(e)}")
+    
+    finally:
+        # Limpar arquivos temporários
+        for temp_path in temp_files:
+            try:
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+            except Exception as e:
+                logger.warning(f"Erro ao limpar arquivo {temp_path}: {e}")
+
+@app.post("/transcribe-audio")
+async def transcribe_audio(
+    file: UploadFile = File(...),
+    language: Optional[str] = "pt"
+):
+    """
+    Transcreve arquivo de áudio para texto
+    
+    - **file**: Arquivo de áudio (mp3, wav, m4a, ogg, flac, etc.)
+    - **language**: Código do idioma (pt, en, es, etc.)
+    """
+    
+    # Verificar se é um arquivo de áudio
+    allowed_audio_types = {
+        'audio/mpeg', 'audio/wav', 'audio/mp4', 'audio/m4a',
+        'audio/ogg', 'audio/webm', 'audio/flac', 'audio/x-wav'
+    }
+    
+    content = await file.read()
+    
+    # Verificar tipo de arquivo
+    if file.content_type not in allowed_audio_types:
+        # Tentar detectar pela extensão
+        ext = file.filename.split('.')[-1].lower() if file.filename else ""
+        if ext not in ['mp3', 'wav', 'm4a', 'ogg', 'webm', 'flac']:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Tipo de arquivo não suportado: {file.content_type}. Use arquivos de áudio."
+            )
+    
+    # Limite de tamanho (100MB)
+    if len(content) > 100 * 1024 * 1024:
+        raise HTTPException(
+            status_code=413,
+            detail="Arquivo muito grande. Máximo: 100MB"
+        )
+    
+    temp_files = []
+    try:
+        # Criar arquivo temporário
+        suffix = f".{file.filename.split('.')[-1]}" if file.filename else ".wav"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+            temp_file.write(content)
+            temp_file_path = temp_file.name
+            temp_files.append(temp_file_path)
+        
+        logger.info(f"Transcrevendo áudio: {file.filename} ({len(content)} bytes)")
+        
+        # Transcrever áudio diretamente
+        if not whisper_model:
+            raise HTTPException(status_code=500, detail="Modelo Whisper não disponível")
+        
+        transcribe_options = {
+            "fp16": False,
+            "temperature": 0.0,
+        }
+        
+        if language and language != "auto":
+            transcribe_options["language"] = language
+        
+        result = whisper_model.transcribe(temp_file_path, **transcribe_options)
+        
+        # Preparar resposta
+        response = {
+            "text": result["text"].strip(),
+            "language": result["language"],
+            "segments": result["segments"],
+            "duration": result.get("segments", [])[-1]["end"] if result.get("segments") else 0,
+            "filename": file.filename,
+            "file_size": len(content),
+            "status": "success"
+        }
+        
+        logger.info("Transcrição de áudio concluída com sucesso")
+        return response
+        
+    except Exception as e:
+        logger.error(f"Erro na transcrição de áudio: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erro na transcrição: {str(e)}")
+    
+    finally:
+        # Limpar arquivos temporários
+        for temp_path in temp_files:
+            try:
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+            except Exception as e:
+                logger.warning(f"Erro ao limpar arquivo {temp_path}: {e}")
+
+@app.post("/transcribe-auto")
+async def transcribe_auto(file: UploadFile = File(...)):
+    """
+    Detecção automática do tipo de arquivo e transcrição
+    
+    - **file**: Qualquer arquivo suportado (PDF, imagem, vídeo, áudio)
+    """
+    
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Nome do arquivo é obrigatório")
+    
+    filename = file.filename.lower()
+    
+    # Redirecionar para endpoint apropriado baseado na extensão
+    if any(filename.endswith(ext) for ext in ['.mp3', '.wav', '.ogg', '.m4a', '.flac']):
+        return await transcribe_audio(file)
+    
+    elif any(filename.endswith(ext) for ext in ['.mp4', '.avi', '.mov', '.mkv', '.webm']):
+        return await transcribe_video(file)
+    
+    elif any(filename.endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.bmp', '.tiff']):
+        # Para imagens, usar OCR
+        return await extract(file)
+    
+    elif filename.endswith('.pdf'):
+        return await extract(file)
+    
+    else:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Tipo de arquivo não suportado: {filename.split('.')[-1] if '.' in filename else 'desconhecido'}"
+        )
