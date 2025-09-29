@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  # Serviço de processamento de planilhas
+  spreadsheet-processor:
+    build:
+      context: .
+      dockerfile: Dockerfile.spreadsheet
+    container_name: avantar-spreadsheet
+    ports:
+      - "8003:8000"
+    environment:
+      - PORT=8000
+      - LOG_LEVEL=INFO
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - avantar-network
+
+  # Serviço de transcrição (opcional - caso queira rodar junto)
+  transcribe:
+    build:
+      context: .
+      dockerfile: Dockerfile.optimized
+    container_name: avantar-transcribe
+    ports:
+      - "8001:8000"
+    restart: unless-stopped
+    networks:
+      - avantar-network
+
+  # Serviço de PDF (opcional)
+  pdf-processor:
+    build:
+      context: .
+      dockerfile: Dockerfile.pypdf
+    container_name: avantar-pdf
+    ports:
+      - "8002:8000"
+    restart: unless-stopped
+    networks:
+      - avantar-network
+
+  # Nginx para load balancing (opcional)
+  nginx:
+    image: nginx:alpine
+    container_name: avantar-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx-spreadsheet.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - spreadsheet-processor
+      - transcribe
+      - pdf-processor
+    restart: unless-stopped
+    networks:
+      - avantar-network
+
+networks:
+  avantar-network:
+    driver: bridge
