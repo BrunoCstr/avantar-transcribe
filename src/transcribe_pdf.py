@@ -23,6 +23,59 @@ def test():
         "version": "1.0.0"
     }
 
+@app.post("/debug-file")
+async def debug_file(file: UploadFile = File(...)):
+    """Endpoint para debug de arquivos - mostra informações detalhadas"""
+    try:
+        data = await file.read()
+        
+        # Informações básicas
+        info = {
+            "filename": file.filename,
+            "content_type": file.content_type,
+            "size_bytes": len(data),
+            "first_20_bytes": data[:20].hex() if len(data) >= 20 else data.hex(),
+            "first_20_chars": data[:20].decode('utf-8', errors='ignore') if len(data) >= 20 else data.decode('utf-8', errors='ignore'),
+            "is_pdf_header": data.startswith(b'%PDF'),
+            "is_pdf_header_lower": data.startswith(b'%pdf'),
+        }
+        
+        # Tentar identificar o tipo de arquivo
+        if data.startswith(b'%PDF'):
+            info["file_type"] = "PDF (header padrão)"
+        elif data.startswith(b'%pdf'):
+            info["file_type"] = "PDF (header minúsculo)"
+        elif data.startswith(b'\x25PDF'):
+            info["file_type"] = "PDF (header codificado)"
+        elif data.startswith(b'PK'):
+            info["file_type"] = "Possivelmente ZIP/Office"
+        elif data.startswith(b'\x89PNG'):
+            info["file_type"] = "PNG"
+        elif data.startswith(b'\xff\xd8\xff'):
+            info["file_type"] = "JPEG"
+        else:
+            info["file_type"] = "Desconhecido"
+        
+        # Tentar carregar como PDF
+        try:
+            reader = PdfReader(io.BytesIO(data))
+            info["pdf_pages"] = len(reader.pages)
+            info["pdf_loaded"] = True
+        except Exception as e:
+            info["pdf_loaded"] = False
+            info["pdf_error"] = str(e)
+        
+        return {
+            "status": "success",
+            "file_info": info
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e)
+        }
+
 def remove_ocr_artifacts(text):
     """Remove lixo de OCR e layout"""
     if not text:
@@ -255,23 +308,28 @@ async def extract(file: UploadFile = File(...)):
                 "status": "error"
             }
         
-        # Verificar se é um PDF válido
-        if not data.startswith(b'%PDF'):
-            return {
-                "text": "",
-                "error": "Arquivo não é um PDF válido",
-                "status": "error"
-            }
+        # Verificar se é um PDF válido (mais flexível)
+        pdf_headers = [b'%PDF', b'%pdf', b'\x25PDF', b'\x25pdf']
+        is_pdf = any(data.startswith(header) for header in pdf_headers)
         
-        # Criar reader com tratamento de erro
+        if not is_pdf:
+            # Log dos primeiros bytes para debug
+            first_bytes = data[:20] if len(data) >= 20 else data
+            logger.warning(f"Arquivo não tem header PDF padrão. Primeiros bytes: {first_bytes}")
+            logger.info("Tentando processar mesmo assim...")
+        
+        # Criar reader com tratamento de erro (tenta mesmo sem header padrão)
         try:
             reader = PdfReader(io.BytesIO(data))
             logger.info(f"PDF carregado com sucesso. Páginas: {len(reader.pages)}")
         except Exception as pdf_error:
+            # Log dos primeiros bytes para debug
+            first_bytes = data[:20] if len(data) >= 20 else data
             logger.error(f"Erro ao carregar PDF: {pdf_error}")
+            logger.error(f"Primeiros bytes do arquivo: {first_bytes}")
             return {
                 "text": "",
-                "error": f"Erro ao carregar PDF: {str(pdf_error)}",
+                "error": f"Erro ao carregar PDF: {str(pdf_error)}. Primeiros bytes: {first_bytes}",
                 "status": "error"
             }
         
