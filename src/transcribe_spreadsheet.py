@@ -143,8 +143,81 @@ def process_csv(data: bytes) -> Dict[str, Any]:
         }
     }
 
+def _normalize_header(header: str, index: int) -> str:
+    """Normaliza cabeçalhos: remove espaços extras, quebras e substitui nulos."""
+    if header is None or str(header).strip() == "":
+        return f"Coluna_{index}"
+    value = str(header).replace("\n", " ").replace("\r", " ")
+    value = " ".join(value.split())
+    return value
+
+
+def _drop_empty_columns(headers: List[str], rows: List[Dict[str, Any]]) -> (List[str], List[Dict[str, Any]]):
+    """Remove colunas totalmente vazias em todas as linhas."""
+    if not headers:
+        return headers, rows
+    columns_have_data: Dict[str, bool] = {h: False for h in headers}
+    for row in rows:
+        for h in headers:
+            v = row.get(h, None)
+            if v is None:
+                continue
+            if isinstance(v, str):
+                if v.strip() != "":
+                    columns_have_data[h] = True
+            else:
+                columns_have_data[h] = True
+    kept_headers = [h for h in headers if columns_have_data.get(h, False)]
+    if len(kept_headers) == len(headers):
+        return headers, rows
+    cleaned_rows: List[Dict[str, Any]] = []
+    for row in rows:
+        cleaned_rows.append({h: row.get(h, "") for h in kept_headers})
+    return kept_headers, cleaned_rows
+
+
+def _clean_row_values(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove pares chave/valor vazios e normaliza strings com espaços/quebras."""
+    cleaned: Dict[str, Any] = {}
+    for k, v in row.items():
+        if v is None:
+            continue
+        if isinstance(v, str):
+            val = " ".join(v.replace("\r", " ").replace("\n", " ").split())
+            if val == "":
+                continue
+            cleaned[k] = val
+        else:
+            cleaned[k] = v
+    return cleaned
+
+
+def _generate_markdown_from_sheet(sheet_name: str, headers: List[str], rows: List[Dict[str, Any]], max_table_rows: int = 100, max_cols_in_table: int = 12) -> str:
+    """Gera markdown amigável para IA com tabela quando possível e lista caso contrário."""
+    lines: List[str] = [f"## {sheet_name}"]
+    if not rows or not headers:
+        return "\n".join(lines)
+    if len(headers) <= max_cols_in_table and len(rows) <= max_table_rows:
+        lines.append("")
+        lines.append("| " + " | ".join(headers) + " |")
+        lines.append("|" + "|".join(["---" for _ in headers]) + "|")
+        for row in rows:
+            values = [str(row.get(h, "")) for h in headers]
+            lines.append("| " + " | ".join(values) + " |")
+        return "\n".join(lines)
+    for idx, row in enumerate(rows, 1):
+        lines.append("")
+        lines.append(f"### Registro {idx}")
+        for h in headers:
+            val = row.get(h, None)
+            if val is None or (isinstance(val, str) and val.strip() == ""):
+                continue
+            lines.append(f"- {h}: {val}")
+    return "\n".join(lines)
+
+
 def process_excel(data: bytes) -> Dict[str, Any]:
-    """Processa arquivo Excel (xlsx/xls) com múltiplas abas"""
+    """Processa arquivo Excel (xlsx/xls) com múltiplas abas, limpa vazios e gera markdown por aba."""
     try:
         workbook = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
         logger.info(f"Excel carregado com sucesso. Abas: {workbook.sheetnames}")
@@ -160,7 +233,7 @@ def process_excel(data: bytes) -> Dict[str, Any]:
         
         # Extrair dados da aba
         rows_data = []
-        headers = []
+        headers: List[str] = []
         
         for idx, row in enumerate(sheet.iter_rows(values_only=True), 1):
             # Pular linhas completamente vazias
@@ -169,7 +242,7 @@ def process_excel(data: bytes) -> Dict[str, Any]:
             
             if idx == 1:
                 # Primeira linha como cabeçalho
-                headers = [str(cell) if cell is not None else f"Coluna_{i}" for i, cell in enumerate(row, 1)]
+                headers = [_normalize_header(cell, i) for i, cell in enumerate(row, 1)]
             else:
                 # Criar dicionário para cada linha
                 row_dict = {}
@@ -186,13 +259,22 @@ def process_excel(data: bytes) -> Dict[str, Any]:
                             value = str(cell)
                         
                         row_dict[headers[i]] = value
-                
-                rows_data.append(row_dict)
+
+                cleaned_row = _clean_row_values(row_dict)
+                if cleaned_row:
+                    rows_data.append(cleaned_row)
+
+        # Remover colunas totalmente vazias
+        headers, rows_data = _drop_empty_columns(headers, rows_data)
+
+        # Gerar markdown amigável por aba
+        markdown_text = _generate_markdown_from_sheet(sheet_name, headers, rows_data)
         
         all_sheets_data[sheet_name] = {
             "headers": headers,
             "rows": rows_data,
-            "total_rows": len(rows_data)
+            "total_rows": len(rows_data),
+            "markdown": markdown_text
         }
         
         logger.info(f"Aba '{sheet_name}' processada: {len(rows_data)} linhas")
@@ -400,7 +482,11 @@ async def extract_for_n8n(file: UploadFile = File(...)):
         # Montar array de abas para n8n
         sheets_array = []
         
+        logger.info(f"Total de abas detectadas: {len(sheets_data)}")
+        logger.info(f"Nomes das abas: {list(sheets_data.keys())}")
+        
         for sheet_name, sheet_data in sheets_data.items():
+            logger.info(f"Montando aba '{sheet_name}' com {sheet_data['total_rows']} linhas")
             sheet_obj = {
                 "sheet_name": sheet_name,
                 "metadata": {
@@ -415,7 +501,7 @@ async def extract_for_n8n(file: UploadFile = File(...)):
             }
             sheets_array.append(sheet_obj)
         
-        logger.info(f"Processamento concluído: {len(sheets_array)} abas")
+        logger.info(f"Processamento concluído: {len(sheets_array)} abas no array final")
         
         return {
             "status": "success",
@@ -468,7 +554,12 @@ async def extract_and_send_to_n8n(
         
         # Montar array de abas
         sheets_array = []
+        
+        logger.info(f"Total de abas detectadas: {len(sheets_data)}")
+        logger.info(f"Nomes das abas: {list(sheets_data.keys())}")
+        
         for sheet_name, sheet_data in sheets_data.items():
+            logger.info(f"Montando aba '{sheet_name}' com {sheet_data['total_rows']} linhas")
             sheet_obj = {
                 "sheet_name": sheet_name,
                 "metadata": {
@@ -482,6 +573,8 @@ async def extract_and_send_to_n8n(
                 "data": sheet_data['rows']
             }
             sheets_array.append(sheet_obj)
+        
+        logger.info(f"Array final com {len(sheets_array)} abas")
         
         # Preparar payload
         payload = {
